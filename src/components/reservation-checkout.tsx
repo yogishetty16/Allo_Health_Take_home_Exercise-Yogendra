@@ -37,10 +37,6 @@ type ReservationCheckoutProps = {
   initialSecondsLeft: number;
 };
 
-function secondsUntil(expiresAt: string) {
-  return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
-}
-
 function formatDuration(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60)
     .toString()
@@ -103,8 +99,13 @@ export function ReservationCheckout({
         throw new Error(body.message ?? "Unable to refresh reservation.");
       }
 
+      const serverTimeStr = response.headers.get("Date");
+      const serverTime = serverTimeStr ? new Date(serverTimeStr).getTime() : Date.now();
+      const expiresTime = new Date(body.reservation.expiresAt).getTime();
+      const nextSecondsLeft = Math.max(0, Math.ceil((expiresTime - serverTime) / 1000));
+
       setReservation(body.reservation);
-      setSecondsLeft(secondsUntil(body.reservation.expiresAt));
+      setSecondsLeft(nextSecondsLeft);
 
       if (showNotice) {
         setNotice({
@@ -140,13 +141,18 @@ export function ReservationCheckout({
       const body = await readResponseBody(response);
 
       if (body.reservation) {
+        const serverTimeStr = response.headers.get("Date");
+        const serverTime = serverTimeStr ? new Date(serverTimeStr).getTime() : Date.now();
+        const expiresTime = new Date(body.reservation.expiresAt).getTime();
+        const nextSecondsLeft = Math.max(0, Math.ceil((expiresTime - serverTime) / 1000));
+
         setReservation(body.reservation);
-        setSecondsLeft(secondsUntil(body.reservation.expiresAt));
+        setSecondsLeft(nextSecondsLeft);
       }
 
       if (response.ok) {
         setNotice({
-          type: "success",
+          type: action === "confirm" ? "success" : "success",
           title: action === "confirm" ? "Reservation confirmed" : "Reservation cancelled",
           message:
             action === "confirm"
@@ -190,12 +196,15 @@ export function ReservationCheckout({
   }
 
   useEffect(() => {
+    if (reservation.status !== "PENDING" || secondsLeft <= 0) {
+      return;
+    }
     const timer = window.setInterval(() => {
-      setSecondsLeft(secondsUntil(reservation.expiresAt));
+      setSecondsLeft((prev) => Math.max(0, prev - 1));
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [reservation.expiresAt]);
+  }, [reservation.status, secondsLeft]);
 
   useEffect(() => {
     if (reservation.status !== "PENDING" || secondsLeft > 0) {

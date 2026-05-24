@@ -96,6 +96,7 @@ export function InventoryDashboard({
 }: InventoryDashboardProps) {
   const router = useRouter();
   const [products, setProducts] = useState(initialProducts);
+  const [idempotencyKeys, setIdempotencyKeys] = useState<Record<string, string>>({});
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [notice, setNotice] = useState<Notice | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -151,12 +152,19 @@ export function InventoryDashboard({
     setNotice(null);
     setPendingInventoryId(row.inventoryId);
 
+    // Retrieve or generate an idempotency key for this row
+    let activeKey = idempotencyKeys[row.inventoryId];
+    if (!activeKey) {
+      activeKey = createIdempotencyKey(row.inventoryId);
+      setIdempotencyKeys((prev) => ({ ...prev, [row.inventoryId]: activeKey }));
+    }
+
     try {
       const response = await fetch("/api/reservations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": createIdempotencyKey(row.inventoryId)
+          "Idempotency-Key": activeKey
         },
         body: JSON.stringify({
           productId: row.productId,
@@ -167,6 +175,13 @@ export function InventoryDashboard({
       const body = await readResponseBody(response);
 
       if (response.status === 201 && body.reservation) {
+        // Clear idempotency key on successful reservation creation
+        setIdempotencyKeys((prev) => {
+          const next = { ...prev };
+          delete next[row.inventoryId];
+          return next;
+        });
+
         setNotice({
           type: "success",
           title: "Reservation created",
@@ -180,6 +195,13 @@ export function InventoryDashboard({
       }
 
       if (response.status === 409) {
+        // Clear idempotency key as the request resulted in a terminal conflict (stock changed)
+        setIdempotencyKeys((prev) => {
+          const next = { ...prev };
+          delete next[row.inventoryId];
+          return next;
+        });
+
         setNotice({
           type: "warning",
           title: "Stock changed",
@@ -189,6 +211,15 @@ export function InventoryDashboard({
         });
         await refreshProducts();
         return;
+      }
+
+      if (response.status === 400) {
+        // Clear idempotency key on terminal validation error
+        setIdempotencyKeys((prev) => {
+          const next = { ...prev };
+          delete next[row.inventoryId];
+          return next;
+        });
       }
 
       setNotice({
@@ -206,6 +237,7 @@ export function InventoryDashboard({
             ? error.message
             : "Reservation request failed."
       });
+      // Do NOT clear activeKey in the catch block to allow the same key on user retry.
     } finally {
       setPendingInventoryId(null);
     }
